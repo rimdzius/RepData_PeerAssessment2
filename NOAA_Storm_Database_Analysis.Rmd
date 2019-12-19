@@ -1,0 +1,211 @@
+---
+title: "NOAA Storm Database, Analysis of Health and Economic Consequences"
+author: "Daniel Rimdzius"
+date: "12/19/2019"
+output: html_document
+---
+  
+---
+  
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      options(scipen = 1, digits = 2))
+```
+
+# Synopsis
+This analysis reviews data collected from NOAA over the past 50 years to determine what weather events are most harmful to the population, and what weather events have the greatest economic consequences.  
+
+With respect to the health of the population, **tornadoes** are clearly the most dangerous weather event for both injuries and fatalities: almost three times more deadly than excessive heat, and almost nine times more injuries than thunderstorm wind. The specific arrangement of events differ for these two factors after tornadoes, but thunderstorm wind, heat, excessive heat, flood, flash flood, lightning, winter storm and high wind are among the top 10 for both injuries and fatalities.  
+
+The greatest economic consequence is clearly due to **floods**, which costs around three times more than the second place hurricane/typhoons. These two categories are followed by Tornadoes, Hail, and flash floods.  
+  
+---  
+
+# Data Processing
+Packages to be included in this analysis are listed below.
+```{r packages}
+require("dplyr")
+require("ggplot2")
+require("gridExtra")
+```  
+
+The raw data was downloaded from the following.
+```{r download}
+if(!file.exists("./data/NOAA.csv.bz2")) { 
+      dir.create("data")
+      download.file(url = "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",
+                  destfile = "./data/NOAA.csv.bz2")
+}
+```  
+
+The raw data is read into R, and the structure can be seen below for reference.
+```{r NOAA, cache=TRUE}
+NOAA <- as_tibble(read.csv("./data/NOAA.csv.bz2", stringsAsFactor = FALSE))
+str(NOAA)
+```  
+  
+---  
+  
+#### Question 1: "Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?"  
+
+We will look at events that caused physical harm to the population, namely: injuries and fatalities.
+```{r health_initial}
+health <- NOAA %>% 
+            mutate(EVTYPE = toupper(EVTYPE)) %>%
+            filter(FATALITIES > 0 | INJURIES > 0) %>%
+            group_by(EVTYPE) %>%
+            summarize(Fatalities = sum(FATALITIES), Injuries = sum(INJURIES)) %>%
+            arrange(desc(Injuries),desc(Fatalities))
+length(unique(health$EVTYPE))
+```
+After processing, there are `r length(unique(health$EVTYPE))` levels of the event type, as you can see. However, according to the [National Weather Service Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf), there are only 48 categories of the event types. You can clearly see that there are multiple items, some misspellings, that should all be grouped together.
+```{r EVTYPE_problems}
+grep("THUNDERSTORM",health$EVTYPE, value = TRUE)
+```  
+
+I subsetted the "health" dataset first, so that the list of EVTYPES was a bit smaller. The full NOAA dataset has `r length(unique(NOAA$EVTYPE))` unique types. It does not make sense to go through all of those lines manually, if we only need to parse `r length(unique(health$EVTYPE))` types.
+
+This is a bit of a labor intensive, and a long list of code, but below is the code to clean up the majority of these categories. There are some that have not been cleaned up, simply due to lack of information. (e.g. "DROWNING" is a cause of death, and does not specify the event, such as "FLOOD" or "FLASH FLOOD", etc.)
+```{r clean_health}
+health <- NOAA %>% 
+            mutate(EVTYPE = toupper(EVTYPE)) %>%
+            filter(FATALITIES > 0 | INJURIES > 0)
+
+clean_events <- function(health) {
+            health[grep("AVALANCE",health$EVTYPE),"EVTYPE"] <- "AVALANCHE"
+            health[grep("FIRE",health$EVTYPE),"EVTYPE"] <- "WILDFIRE"
+            health[grep("BLACK ICE|BLOWING SNOW|FALLING SNOW/ICE|ICE ROAD|ICY|ICE ON|LIGHT SNOW|^SNOW|^WINTER       WEATHER|WINTRY|^ICE$|ICE AND|ICE F|LATE SEASON SNOW|WINTER WEATHER",health$EVTYPE),"EVTYPE"] <- "WINTER WEATHER"
+            health[grep("COASTAL|CSTL|EROSION",health$EVTYPE),"EVTYPE"] <- "COASTAL FLOOD"
+            health[grep("^COLD|LOW TEMP|UNSEASONABL*. COLD|^COOL",health$EVTYPE),"EVTYPE"] <- "COLD/WIND CHILL"
+            health[grep("DROUGT/EXCESSIVE HEAT",health$EVTYPE),"EVTYPE"] <- "DROUGHT"
+            health[grep("MICROBURST|GUSTY|HIGH WIND|WIND DAMAGE|WINDS|^WIND$|GRADIENT WIND|^WIND",health$EVTYPE),"EVTYPE"] <- "HIGH WIND"
+            health[grep("^STRONG WIND|DOWNBURST|TURBULENCE",health$EVTYPE),"EVTYPE"] <- "STRONG WIND"
+            health[grep("EXCESSIVE RAINFALL|^HEAVY RAIN|TORRENTIAL|WETNESS|HEAVY PRECIP|SHOWER|RAIN",health$EVTYPE),"EVTYPE"] <- "HEAVY RAIN"
+            health[grep("EXTENDED COLD|EXTREME WIND*.CHILL|RECORD COLD|EXTREME COLD",health$EVTYPE),"EVTYPE"] <- "EXTREME COLD/WIND CHILL"
+            health[grep("EXTREME HEAT|RECORD HEAT|EXCESSIVE HEAT",health$EVTYPE),"EVTYPE"] <- "EXCESSIVE HEAT"
+            health[grep("FLASH FLOOD|RAPIDLY RISING WATER|DAM BREAK",health$EVTYPE),"EVTYPE"] <- "FLASH FLOOD"
+            health[grep("^FLOOD|RIVER*.FLOOD|^UR|^BREAKUP|MAJOR FLOOD|MINOR FLOOD|RURAL FLOOD|STREAM FLOOD|ICE JAM",health$EVTYPE),"EVTYPE"] <- "FLOOD"
+            health[grep("FOG AND COLD",health$EVTYPE),"EVTYPE"] <- "FREEZING FOG"
+            health[grep("FOG",health$EVTYPE),"EVTYPE"] <- "DENSE FOG"
+            health[grep("FREEZE|FROST",health$EVTYPE),"EVTYPE"] <- "FROST/FREEZE"
+            health[grep("FREEZING|HEAVY MIX|MIXED PRECIP",health$EVTYPE),"EVTYPE"] <- "SLEET"
+            health[grep("GLAZE",health$EVTYPE),"EVTYPE"] <- "WINTER STORM"
+            health[grep("SURF|HEAVY SEA|HEAVY SURF|HIGH SEA|HIGH SURF|HIGH WATER|HIGH WAVE|ROGUE WAVE|^ROUGH|SWELL",health$EVTYPE),"EVTYPE"] <- "HIGH SURF"
+            health[grep("^HEAT|UNSEASONABLY WARM|^WARM",health$EVTYPE),"EVTYPE"] <- "HEAT"
+            health[grep("^HEAVY SNOW|EXCESSIVE SNOW|RECORD SNOW",health$EVTYPE),"EVTYPE"] <- "HEAVY SNOW"
+            health[grep("HURRICANE|TYPHOON",health$EVTYPE),"EVTYPE"] <- "HURRICANE/TYPHOON"
+            health[grep("ICE STORM",health$EVTYPE),"EVTYPE"] <- "ICE STORM"
+            health[grep("LANDSLIDE|MUDSLIDE|LANDSLUMP|LANDSPOUT|SLIDE",health$EVTYPE),"EVTYPE"] <- "DEBRIS FLOW"
+            health[grep("LIGHTNING|LIGHTING|LIGNTNING",health$EVTYPE),"EVTYPE"] <- "LIGHTNING"
+            health[grep("MARINE STRONG",health$EVTYPE),"EVTYPE"] <- "MARINE HIGH WIND"
+            health[grep("RIP CURRENT",health$EVTYPE),"EVTYPE"] <- "RIP CURRENT"
+            health[grep("HAIL",health$EVTYPE),"EVTYPE"] <- "HAIL"
+            health[grep("STORM SURGE|TIDE",health$EVTYPE),"EVTYPE"] <- "STORM TIDE"
+            health[grep("THUNDERSTORM|TSTM|THUNDERTORM|WIND STORM|THUNDERSTROM WIND|TUNDERSTORM WIND",health$EVTYPE),"EVTYPE"] <- "THUNDERSTORM WIND"
+            health[grep("THUNDERSNOW|^WINTER STORM|BLIZZARD|ICE STORM",health$EVTYPE),"EVTYPE"] <- "WINTER STORM"
+            health[grep("TIDAL FLOODING|LAKE*.FLOOD",health$EVTYPE),"EVTYPE"] <- "LAKESHORE FLOOD"
+            health[grep("TORNADO|WHIRLWIND|GUSTNADO|TORNDAO",health$EVTYPE),"EVTYPE"] <- "TORNADO"
+            health[grep("TROPICAL STORM",health$EVTYPE),"EVTYPE"] <- "TROPICAL STORM"
+            health[grep("WATERSP",health$EVTYPE),"EVTYPE"] <- "WATERSPOUT"
+            health[grep("BLOWING DUST",health$EVTYPE),"EVTYPE"] <- "DUST STORM"
+            health[grep("LAKE*.SNOW",health$EVTYPE),"EVTYPE"] <- "LAKE-EFFECT SNOW"
+            health
+}
+
+health <- clean_events(health) %>%
+            group_by(EVTYPE) %>%
+            summarize(Fatalities = sum(FATALITIES, na.rm=TRUE), Injuries = sum(INJURIES, na.rm=TRUE))
+top_injury_data <- health %>% 
+            select(EVTYPE,Injuries) %>% 
+            arrange(desc(Injuries)) %>% 
+            top_n(10)
+top_fatality_data <- health %>% 
+            select(EVTYPE,Fatalities) %>% 
+            arrange(desc(Fatalities)) %>% 
+            top_n(10)
+
+length(unique(health$EVTYPE))
+```
+We have parsed this down to `r length(unique(health$EVTYPE))` categories, which should give us a much better answer on the total injuries and fatalities caused by these events. The final results can be seen in the results section below.
+  
+---  
+  
+#### Question 2: "Across the United States, which types of events have the greatest economic consequences?"  
+
+Here we will process the data to look at economic factors, namely: property damage and crop damage. The variables needed here are "PROPDMG" and "CROPDMG" which gives the numeric dollar value in property and crop damage, and "PROPDMGEXP" and "CROPDMGEXP" which give the suffix of the dollars (k for thousand, M for million, B for billion).  
+
+However, the EXP variables have some messy data:
+```{r economic_incorrect_values}
+unique(NOAA$PROPDMGEXP)
+unique(NOAA$CROPDMGEXP)
+```  
+If we look to see how much of a problem this is, we see these incorrect values only account for `r (nrow(NOAA[which(!(NOAA$PROPDMGEXP %in% toupper(c("K","B","M","")))),]) + nrow(NOAA[which(!(NOAA$CROPDMGEXP %in% toupper(c("K","B","M","")))),])) / nrow(NOAA) * 100`% of the data. These will simply be removed from the analysis.
+```{r economic_incorrect_values_amount}
+nrow(NOAA[which(!(NOAA$PROPDMGEXP %in% toupper(c("K","B","M","")))),])
+nrow(NOAA[which(!(NOAA$CROPDMGEXP %in% toupper(c("K","B","M","")))),])
+(nrow(NOAA[which(!(NOAA$PROPDMGEXP %in% toupper(c("K","B","M","")))),]) +
+      nrow(NOAA[which(!(NOAA$CROPDMGEXP %in% toupper(c("K","B","M","")))),])) / 
+      nrow(NOAA) * 100
+```  
+
+Filtering the data to look at any economic impact, we will again take a look at which event types we need to clean up.
+```{r economic}
+economic <- NOAA %>%
+            mutate(EVTYPE = toupper(EVTYPE)) %>%
+            mutate(PROPDMGEXP = toupper(PROPDMGEXP)) %>%
+            mutate(CROPDMGEXP = toupper(CROPDMGEXP)) %>%
+            filter(CROPDMG > 0 | PROPDMG > 0)
+length(unique(economic$EVTYPE))
+```  
+Just like with the health data, we have a bunch of event types that need to be cleaned up, with `r length(unique(economic$EVTYPE))` unique event types. We will simply run this through the same clean_events function we created earlier for the health dataset.  
+```{r clean_economic}
+economic <- clean_events(economic)
+length(unique(economic$EVTYPE))
+```  
+Which gives us a much cleaner `r length(unique(economic$EVTYPE))` event types to analyze.  
+
+Now, we will need to modify the actual property and crop damage costs. They are both split into two variables: a numeric column, and a text column stating the suffix (thousand, million, billion). This needs to be modified to a single variable for both property and crop damage, i.e. PROPDMG value of 25.5 and PROPDMGEXP value of "M" needs to be combined to a value of "25,500,000".  
+```{r final_economic}
+economic$PROPDMGEXP <- with(economic,case_when(PROPDMGEXP=="K" ~ 1000, PROPDMGEXP=="M" ~ 1000000, PROPDMGEXP=="B" ~ 1000000000, PROPDMGEXP == NA ~ 1))
+economic$CROPDMGEXP <- with(economic,case_when(CROPDMGEXP=="K" ~ 1000, CROPDMGEXP=="M" ~ 1000000, CROPDMGEXP=="B" ~ 1000000000, CROPDMGEXP == NA ~ 1))
+top_economic <- economic %>%
+            mutate(DMG = PROPDMG * PROPDMGEXP + CROPDMG * CROPDMGEXP) %>%
+            group_by(EVTYPE) %>%
+            summarize(Damage = sum(DMG, na.rm=TRUE)) %>%
+            arrange(desc(Damage)) %>% 
+            top_n(10)
+```  
+The data has now been processed, and the results of the data can be seen below.
+  
+---  
+  
+# Results
+
+### Question 1: "Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?"  
+We can take a look at our health dataset and see the 10 events that caused the most injuries, and the 10 events that caused the most fatalities.  
+```{r health_results}
+top_injury_data
+top_fatality_data
+injury_plot <- ggplot(top_injury_data,aes(x=reorder(EVTYPE, -Injuries), y=Injuries))+
+                  geom_bar(stat="identity") +
+                  theme(axis.text.x = element_text(angle = 90)) +
+                  labs(x="Event Type", y="Number of Injuries", title="Most Harmful Weather Events Related to Injuries")
+fatality_plot <- ggplot(top_fatality_data,aes(x=reorder(EVTYPE, -Fatalities), y=Fatalities))+
+                  geom_bar(stat="identity") +
+                  theme(axis.text.x = element_text(angle = 90)) +
+                  labs(x="Event Type", y="Number of Fatalities", title="Most Harmful Weather Events Related to Fatalities")
+grid.arrange(injury_plot, fatality_plot, ncol=2)
+```
+  
+---  
+  
+### Question 2: "Across the United States, which types of events have the greatest economic consequences?"  
+The top 10 events that caused the greatest economic consequences can be seen below. the greatest economic consequences is being defined as the total sum of crop damage and property damage. Unlike injuries and fatalities, these are both in similar terms of dollars and could be simply combined.  
+```{r economic_results}
+top_economic
+ggplot(top_economic, aes(x=reorder(EVTYPE, -Damage), y=Damage))+
+      geom_bar(stat="identity") +
+      theme(axis.text.x = element_text(angle = 90)) +
+      labs(x="Event Type", y="Economic Damage ($)", title="Most Harmful Weather Events Related to Crop and Property Damage")
+```  
